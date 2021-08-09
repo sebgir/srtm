@@ -24,7 +24,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using Microsoft.Extensions.Caching.Memory;
 using SRTM.Sources;
 
 namespace SRTM
@@ -52,27 +51,7 @@ namespace SRTM
         /// <exception cref='DirectoryNotFoundException'>
         /// Is thrown when part of a file or directory argument cannot be found.
         /// </exception>
-        public SRTMData(string dataDirectory, ISRTMSource source) : this(dataDirectory, source, TimeSpan.MaxValue)
-        {
-            
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SRTM.SRTMData"/> class.
-        /// </summary>
-        /// <param name='dataDirectory'>
-        /// Data directory.
-        /// </param>
-        /// <param name="source">
-        /// Data source to use. Must be an instance of the <see cref="SRTM.ISRTMSource"/> class
-        /// </param>
-        /// <param name="dataCellExpiration">
-        /// amount of time before a dataCell expiration
-        /// </param>
-        /// <exception cref='DirectoryNotFoundException'>
-        /// Is thrown when part of a file or directory argument cannot be found.
-        /// </exception>
-        public SRTMData(string dataDirectory, ISRTMSource source, TimeSpan dataCellExpiration)
+        public SRTMData(string dataDirectory, ISRTMSource source)
         {
             if (!Directory.Exists(dataDirectory))
                 throw new DirectoryNotFoundException(dataDirectory);
@@ -80,11 +59,8 @@ namespace SRTM
             _source = source;
             GetMissingCell = _source.GetMissingCell;
             DataDirectory = dataDirectory;
-            DataCells = new MemoryCache(new MemoryCacheOptions());
-
-            _datacellExpiration = dataCellExpiration;
+            DataCells = new List<ISRTMDataCell>();
         }
-
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SRTM.SRTMData"/> class.
@@ -128,16 +104,8 @@ namespace SRTM
         /// <value>
         /// The SRTM data cells.
         /// </value>
-        private MemoryCache DataCells { get; set; }
-
-        /// <summary>
-        /// delay before datacell expiration in memoryCache.
-        /// </summary>
-        /// <value>
-        /// datacell Expiration
-        /// </value>
-        private readonly TimeSpan _datacellExpiration;
-
+        private List<ISRTMDataCell> DataCells { get; set; }
+        
         #region Public methods
 
         /// <summary>
@@ -145,7 +113,7 @@ namespace SRTM
         /// </summary>
         public void Unload()
         {
-            DataCells.Compact(1);
+            DataCells.Clear();
         }
 
         /// <summary>
@@ -221,76 +189,75 @@ namespace SRTM
                     cellLongitude -= 1; // because negative so in left tile
                 }
             }
-            var key = (cellLatitude, cellLongitude);
 
-            return DataCells.GetOrCreate(key, entry =>
+            var dataCell = DataCells.Where(dc => dc.Latitude == cellLatitude && dc.Longitude == cellLongitude).FirstOrDefault();
+            if (dataCell != null)
             {
-                entry.SlidingExpiration = _datacellExpiration;
+                return dataCell;
+            }
 
-                string filename = string.Format("{0}{1:D2}{2}{3:D3}",
+            string filename = string.Format("{0}{1:D2}{2}{3:D3}",
                 cellLatitude < 0 ? "S" : "N",
                 Math.Abs(cellLatitude),
                 cellLongitude < 0 ? "W" : "E",
                 Math.Abs(cellLongitude));
 
-                var filePath = Path.Combine(DataDirectory, filename + ".hgt");
-                var zipFilePath = Path.Combine(DataDirectory, filename + ".hgt.zip");
-                var txtFilePath = Path.Combine(DataDirectory, filename + ".txt");
-                var count = -1;
+            var filePath = Path.Combine(DataDirectory, filename + ".hgt");
+            var zipFilePath = Path.Combine(DataDirectory, filename + ".hgt.zip");
+            var txtFilePath = Path.Combine(DataDirectory, filename + ".txt");
+            var count = -1;
 
-                if (!File.Exists(filePath) && !File.Exists(zipFilePath) && !File.Exists(txtFilePath) &&
-                    this.GetMissingCell != null)
+            if (!File.Exists(filePath) && !File.Exists(zipFilePath) && !File.Exists(txtFilePath) &&
+                this.GetMissingCell != null)
+            {
+                this.GetMissingCell(DataDirectory, filename);
+            }
+            else if(File.Exists(txtFilePath) && this.GetMissingCell != null)
+            {
+                var txtFile = File.ReadAllText(txtFilePath);
+                if (!int.TryParse(txtFile, out count))
                 {
-                    this.GetMissingCell(DataDirectory, filename);
+                    File.Delete(txtFilePath);
+                    count = -1;
                 }
-                else if (File.Exists(txtFilePath) && this.GetMissingCell != null)
+                else if(count < RETRIES)
                 {
-                    var txtFile = File.ReadAllText(txtFilePath);
-                    if (!int.TryParse(txtFile, out count))
+                    if (this.GetMissingCell(DataDirectory, filename))
                     {
                         File.Delete(txtFilePath);
-                        count = -1;
-                    }
-                    else if (count < RETRIES)
-                    {
-                        if (this.GetMissingCell(DataDirectory, filename))
-                        {
-                            File.Delete(txtFilePath);
-                        }
                     }
                 }
-
-                ISRTMDataCell dataCell;
-                if (File.Exists(filePath))
+            }
+            
+            if (File.Exists(filePath))
+            {
+                dataCell = new SRTMDataCell(filePath);
+            }
+            else if(File.Exists(zipFilePath))
+            {
+                dataCell = new SRTMDataCell(zipFilePath);
+            }
+            else
+            {
+                if (count < 0)
                 {
-                    dataCell = new SRTMDataCell(filePath);
+                    File.WriteAllText(txtFilePath, "1");
+                    return GetDataCell(latitude, longitude);
                 }
-                else if (File.Exists(zipFilePath))
+                else if (count < RETRIES)
                 {
-                    dataCell = new SRTMDataCell(zipFilePath);
+                    count++;
+                    File.WriteAllText(txtFilePath, count.ToString());
+                    return GetDataCell(latitude, longitude);
                 }
                 else
                 {
-                    if (count < 0)
-                    {
-                        File.WriteAllText(txtFilePath, "1");
-                        return GetDataCell(latitude, longitude);
-                    }
-                    else if (count < RETRIES)
-                    {
-                        count++;
-                        File.WriteAllText(txtFilePath, count.ToString());
-                        return GetDataCell(latitude, longitude);
-                    }
-                    else
-                    {
-                        dataCell = new EmptySRTMDataCell(txtFilePath);
-                    }
+                    dataCell = new EmptySRTMDataCell(txtFilePath);
                 }
-                
+            }
+            DataCells.Add(dataCell);
 
-                return dataCell;
-            });     
+            return dataCell;
         }
         
         #endregion
