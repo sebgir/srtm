@@ -77,7 +77,7 @@ namespace SRTM.Tests.Functional
             Console.WriteLine("Start BilinearInterpolationTest.");
             
             // https://dds.cr.usgs.gov/srtm/version2_1/SRTM3/
-            var srtmData = new SRTMData(@"c:\temp\srtm-cache", new NASASource(new System.Net.NetworkCredential() { UserName = "sebastiengirard", Password = "!3Cae$48" }));
+            var srtmData = new SRTMData(@"c:\temp\srtm-cache", new NASASource(new System.Net.NetworkCredential() { UserName = "YOUR_NASA_USERNAME", Password = "Potato123" }));
 
             double? elevationInnsbruck = srtmData.GetElevationBilinear(47.267222, 11.392778);
             Console.WriteLine("Bilinear elevation of Innsbruck: {0}m", elevationInnsbruck);
