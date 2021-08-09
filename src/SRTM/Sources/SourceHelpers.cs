@@ -3,6 +3,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 
 namespace SRTM.Sources
 {
@@ -23,9 +24,49 @@ namespace SRTM.Sources
         public static bool DownloadWithCredentials(NetworkCredential credentials, string local, string remote,
             bool logErrors = false)
         {
-            HttpClientHandler handler = new HttpClientHandler {Credentials = credentials};
-            var client = new HttpClient(handler);
-            return PerformDownload(client, local, remote, logErrors);
+            try
+            {
+                string resource = remote;
+                string urs = "https://urs.earthdata.nasa.gov";
+                string username = credentials.UserName;
+                string password = credentials.Password;
+
+                var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", @"EDL-YOUR_BEARER_TOKEN from nasa");
+                CredentialCache cache = new CredentialCache();
+                cache.Add(new Uri(urs), "Basic", new NetworkCredential(username, password));
+
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(resource);
+                request.Method = "GET";
+                request.Credentials = cache;
+                request.CookieContainer = new CookieContainer();
+                request.PreAuthenticate = false;
+                request.AllowAutoRedirect = true;
+                HttpWebResponse response = (HttpWebResponse)request.GetResponse();
+
+                long length = response.ContentLength;
+                string type = response.ContentType;
+                Stream stream = response.GetResponseStream();
+                StreamReader reader = new StreamReader(stream);
+
+
+                // Process the stream data (e.g. save to file)
+
+                using (var outputStream = File.OpenWrite(local))
+                {
+                    stream.CopyTo(outputStream);
+                }
+
+
+                // Tidy up
+
+                stream.Close();
+                reader.Close();
+            }
+            catch (Exception ex)
+            { return false; }
+
+            return true;
         }
 
         private static bool PerformDownload(HttpClient client, string local, string remote, bool logErrors = false)
